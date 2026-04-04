@@ -66,3 +66,41 @@ python -m pytest tests/ -v
 ## Supported Pipeline Templates
 
 `SINGLE_CYCLE`, `MULTI_CYCLE`, `FIVE_STAGE`, `OUT_OF_ORDER`
+
+---
+
+## Uplift Agent Integration
+
+Sub-Team is wrapped by 5 tools in the Uplift Agent, allowing the full CPU design pipeline to be invoked directly from Uplift Agent conversations:
+
+| Uplift Agent Tool | Maps To |
+|-------------------|---------|
+| `sub_team_run` | Full four-agent pipeline end-to-end |
+| `sub_team_spec` | `SpecificationAgent` only |
+| `sub_team_microarch` | `MicroarchitectureAgent` only |
+| `sub_team_implement` | `ImplementationAgent` only |
+| `sub_team_verify` | `VerificationAgent` only |
+
+This means users can invoke CPU RTL generation from natural language within the Uplift Agent, running individual pipeline stages or the full chain.
+
+---
+
+## Draymond Orchestrator Ready
+
+Sub-Team is registered as a **Draymond Orchestrator** entity.
+
+**Draymond** is the central AI agent management dashboard for the Uplift Ecosystem. It orchestrates all agents from a single Marvel-style character roster dashboard — each agent gets a character bio card with capabilities, status, and invocation controls.
+
+**Entity registration:**
+- **Slug:** `sub-team`
+- **Kind:** `agent`
+- **Registered in:** `seed.ts` and `business-chains.ts`
+
+**When connected to Draymond, Sub-Team gains:**
+- Centralized health monitoring from the Draymond dashboard
+- Multi-agent chain workflows — Sub-Team is the core of the **CPU RTL Generation Pipeline** chain template, which can be triggered from the Draymond dashboard or scheduled to run automatically
+- Scheduled job execution managed by Draymond's job scheduler
+
+**Connection is optional** — Sub-Team works identically as a standalone tool. Run `python main.py` or import the agents directly in Python. Draymond integration simply adds orchestration visibility and cross-agent workflow capabilities.
+
+**The Uplift Ecosystem includes:** Uplift Agent, Sports Steve, Sub Team, Megacode, OmniResearch Pro, Social Media Dashboard, Indy Music Platform, TradingAgents, Overlay Chain.
