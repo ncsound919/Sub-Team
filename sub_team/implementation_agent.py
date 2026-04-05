@@ -12,6 +12,19 @@ Grammar-based code generation (no neural inference).  Each CPU component
 (ALU, register file, pipeline registers, hazard unit, control unit) is
 produced by a deterministic template renderer.  The same inputs always
 produce the same RTL text.
+
+LLM augmentation (optional)
+----------------------------
+When ``use_llm=True`` is passed to ``ImplementationAgent.run()`` **and** an
+API key is available, the LLM is asked to:
+
+  * Review the generated Verilog modules for potential synthesis issues.
+  * Suggest micro-optimisations (e.g. pipelining, resource sharing).
+  * Flag any RTL patterns that may cause timing or functional problems.
+
+Results are stored in ``RTLOutput.llm_review`` (list of strings) and do
+**not** alter the generated Verilog source.  The deterministic RTL is always
+the authoritative output.
 """
 
 from __future__ import annotations
@@ -39,11 +52,15 @@ class RTLModule:
 class RTLOutput:
     """Collection of Verilog modules produced by the ImplementationAgent."""
     modules: List[RTLModule] = field(default_factory=list)
+    # LLM-generated code review notes (empty when not used / unavailable)
+    llm_review: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
         lines = [f"RTLOutput ({len(self.modules)} modules)"]
         for m in self.modules:
             lines.append(f"  [{m.name}]  — {m.description}")
+        if self.llm_review:
+            lines.append(f"  LLM review : {len(self.llm_review)} items")
         return "\n".join(lines)
 
     def write_to_dir(self, directory: str) -> List[str]:
@@ -404,6 +421,54 @@ endmodule
 
 
 # ---------------------------------------------------------------------------
+# LLM augmentation helper
+# ---------------------------------------------------------------------------
+
+def _llm_review_rtl(spec: FormalSpec, plan: MicroarchPlan, output: "RTLOutput") -> List[str]:
+    """
+    Ask the LLM to review the generated RTL for synthesis / correctness issues.
+    Returns a list of review notes, or empty list if unavailable.
+    """
+    from .llm_client import llm_complete
+
+    system = (
+        "You are a senior RTL design engineer and verification expert. "
+        "Review the following generated Verilog module list for an auto-generated "
+        "CPU and provide:\n"
+        "1. Any potential synthesis or timing issues.\n"
+        "2. Functional correctness concerns.\n"
+        "3. Suggested micro-optimisations.\n"
+        "4. Anything that would cause simulation mismatches.\n"
+        "Be concise — respond as a numbered list (max 6 items)."
+    )
+
+    module_summaries = "\n".join(
+        f"  - {m.name}: {m.description}" for m in output.modules
+    )
+    # Include a snippet of the top-level module (first 40 lines) for context
+    top_mod = next(
+        (m for m in output.modules if m.name.startswith("cpu_")), None
+    )
+    snippet = ""
+    if top_mod:
+        lines = top_mod.source.splitlines()[:40]
+        snippet = "\n".join(lines)
+
+    user = (
+        f"ISA: {spec.isa_name}\n"
+        f"Pipeline: {plan.pipeline_name}\n"
+        f"Modules generated:\n{module_summaries}\n\n"
+        f"Top-level module snippet (first 40 lines):\n```verilog\n{snippet}\n```\n\n"
+        "Provide your RTL review."
+    )
+
+    raw = llm_complete(system, user, max_tokens=640, temperature=0.2)
+    if not raw:
+        return []
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
@@ -417,11 +482,30 @@ class ImplementationAgent:
         output = agent.run(formal_spec, microarch_plan)
         print(output.summary())
         output.write_to_dir("rtl/")
+
+    LLM augmentation::
+
+        output = agent.run(formal_spec, microarch_plan, use_llm=True)
+        # output.llm_review contains LLM-generated RTL review notes
     """
 
-    def run(self, spec: FormalSpec, plan: MicroarchPlan) -> RTLOutput:
+    def run(
+        self,
+        spec: FormalSpec,
+        plan: MicroarchPlan,
+        *,
+        use_llm: bool = False,
+    ) -> RTLOutput:
         """
         Deterministically generate Verilog RTL for the specified CPU.
+
+        Parameters
+        ----------
+        spec : FormalSpec
+        plan : MicroarchPlan
+        use_llm : bool
+            When True and an API key is available, populate
+            ``RTLOutput.llm_review`` with LLM-generated code review notes.
         """
         data_width = 64 if "64" in spec.isa_name else 32
         has_mul = any(
@@ -457,5 +541,9 @@ class ImplementationAgent:
                 spec.isa_name, data_width, stage_names, forwarding, has_mul
             ),
         ))
+
+        # Optional LLM augmentation
+        if use_llm:
+            output.llm_review = _llm_review_rtl(spec, plan, output)
 
         return output

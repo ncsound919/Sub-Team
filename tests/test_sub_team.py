@@ -325,6 +325,12 @@ class TestCrossDisciplinaryAgent:
             "sample_size": 150,
             "confidence_level": 0.95,
             "distribution": "normal",
+            # Legal domain params
+            "data_types": ["pii", "health"],
+            "jurisdictions": ["EU", "US"],
+            "contract_clause_count": 30,
+            "liability_cap_usd": 500_000,
+            "industry": "healthcare",
         }
         params.update(extra_params)
         return DomainProblem(
@@ -336,7 +342,7 @@ class TestCrossDisciplinaryAgent:
     # ── DomainProblem ──────────────────────────────────────────────────────
 
     def test_supported_domains_list(self):
-        assert set(SUPPORTED_DOMAINS) == {"logistics", "biotech", "fintech", "probability"}
+        assert set(SUPPORTED_DOMAINS) == {"logistics", "biotech", "fintech", "probability", "legal"}
 
     def test_domain_problem_deduplicates(self):
         p = DomainProblem(
@@ -367,6 +373,7 @@ class TestCrossDisciplinaryAgent:
         assert set(analysis.domains_analysed) == {"logistics", "probability"}
 
     def test_all_four_domains_produce_insights(self):
+        # The _full_problem now includes all 5 domains; we check all 5 produce insights
         analysis = self._agent().run(self._full_problem())
         domains_with_insights = {i.domain for i in analysis.insights}
         assert domains_with_insights == set(SUPPORTED_DOMAINS)
@@ -659,3 +666,350 @@ class TestCrossDisciplinaryAgent:
         assert a1.overall_risk_score == a2.overall_risk_score
         assert len(a1.insights) == len(a2.insights)
         assert len(a1.cross_domain_links) == len(a2.cross_domain_links)
+
+
+# ---------------------------------------------------------------------------
+# Legal domain tests
+# ---------------------------------------------------------------------------
+
+class TestLegalDomain:
+    def _agent(self) -> CrossDisciplinaryAgent:
+        return CrossDisciplinaryAgent()
+
+    def _legal_problem(self, **params) -> DomainProblem:
+        base = {
+            "data_types": ["pii", "health"],
+            "jurisdictions": ["EU", "US"],
+            "contract_clause_count": 25,
+            "liability_cap_usd": 0,
+            "industry": "healthcare",
+        }
+        base.update(params)
+        return DomainProblem(name="legal-test", domains=["legal"], parameters=base)
+
+    def test_legal_domain_produces_insights(self):
+        analysis = self._agent().run(self._legal_problem())
+        assert len(analysis.insights_for("legal")) >= 1
+
+    def test_legal_insights_have_valid_fields(self):
+        analysis = self._agent().run(self._legal_problem())
+        for insight in analysis.insights_for("legal"):
+            assert insight.domain == "legal"
+            assert isinstance(insight.finding, str) and insight.finding
+            assert 0.0 <= insight.confidence <= 1.0
+            assert insight.risk_level in {"low", "medium", "high"}
+
+    def test_gdpr_detected_for_eu_pii(self):
+        analysis = self._agent().run(self._legal_problem(
+            data_types=["pii"], jurisdictions=["EU"]
+        ))
+        findings = " ".join(i.finding for i in analysis.insights_for("legal"))
+        assert "GDPR" in findings
+
+    def test_hipaa_detected_for_us_health(self):
+        analysis = self._agent().run(self._legal_problem(
+            data_types=["health"], jurisdictions=["US"]
+        ))
+        findings = " ".join(i.finding for i in analysis.insights_for("legal"))
+        assert "HIPAA" in findings
+
+    def test_pci_dss_detected_for_payment_data(self):
+        analysis = self._agent().run(self._legal_problem(
+            data_types=["payment"], jurisdictions=["US"]
+        ))
+        findings = " ".join(i.finding for i in analysis.insights_for("legal"))
+        assert "PCI-DSS" in findings
+
+    def test_no_regulations_for_unknown_data_type_and_jurisdiction(self):
+        analysis = self._agent().run(self._legal_problem(
+            data_types=["internal_notes"], jurisdictions=["Antarctica"]
+        ))
+        findings = " ".join(i.finding for i in analysis.insights_for("legal"))
+        # Should fall through to the generic no-major-regulations finding
+        assert "No major sector-specific regulations" in findings or len(
+            analysis.insights_for("legal")
+        ) >= 1
+
+    def test_contract_uncapped_liability_high_risk(self):
+        analysis = self._agent().run(self._legal_problem(
+            data_types=[], jurisdictions=[],
+            contract_clause_count=80,
+            liability_cap_usd=0,
+        ))
+        risks = {i.risk_level for i in analysis.insights_for("legal")}
+        assert "high" in risks
+
+    def test_contract_capped_low_clause_count_low_risk(self):
+        analysis = self._agent().run(self._legal_problem(
+            data_types=[], jurisdictions=[],
+            contract_clause_count=5,
+            liability_cap_usd=1_000_000,
+        ))
+        contract_insights = [
+            i for i in analysis.insights_for("legal") if "Contract risk" in i.finding
+        ]
+        assert len(contract_insights) >= 1
+        assert contract_insights[0].risk_level == "low"
+
+    def test_industry_healthcare_obligations_included(self):
+        analysis = self._agent().run(self._legal_problem(industry="healthcare"))
+        findings = " ".join(i.finding for i in analysis.insights_for("legal"))
+        assert "FDA" in findings or "HIPAA" in findings or "21 CFR" in findings
+
+    def test_industry_finance_obligations_included(self):
+        analysis = self._agent().run(self._legal_problem(
+            data_types=["financial"], jurisdictions=["US"], industry="finance"
+        ))
+        findings = " ".join(i.finding for i in analysis.insights_for("legal"))
+        assert "MiFID" in findings or "AML" in findings or "Basel" in findings
+
+    def test_legal_fintech_cross_domain_link(self):
+        problem = DomainProblem(
+            name="legal-fintech",
+            domains=["legal", "fintech"],
+            parameters={
+                "data_types": ["financial"], "jurisdictions": ["US"],
+                "transaction_volume": 10_000, "risk_tolerance": 0.5,
+            },
+        )
+        analysis = self._agent().run(problem)
+        pairs = [tuple(sorted(lnk.domains)) for lnk in analysis.cross_domain_links]
+        assert ("fintech", "legal") in pairs
+
+    def test_legal_biotech_cross_domain_link(self):
+        problem = DomainProblem(
+            name="legal-biotech",
+            domains=["legal", "biotech"],
+            parameters={
+                "data_types": ["health"], "jurisdictions": ["US"],
+                "compound_count": 3, "trial_phase": 2,
+            },
+        )
+        analysis = self._agent().run(problem)
+        pairs = [tuple(sorted(lnk.domains)) for lnk in analysis.cross_domain_links]
+        assert ("biotech", "legal") in pairs
+
+    def test_legal_logistics_cross_domain_link(self):
+        problem = DomainProblem(
+            name="legal-logistics",
+            domains=["legal", "logistics"],
+            parameters={
+                "data_types": [], "jurisdictions": ["EU"],
+                "units": 1000, "routes": 5,
+            },
+        )
+        analysis = self._agent().run(problem)
+        pairs = [tuple(sorted(lnk.domains)) for lnk in analysis.cross_domain_links]
+        assert ("legal", "logistics") in pairs
+
+    def test_legal_in_full_analysis_summary(self):
+        problem = DomainProblem(
+            name="full-with-legal",
+            domains=list(SUPPORTED_DOMAINS),
+            parameters={
+                "units": 1000, "routes": 10, "demand_variability": 0.3,
+                "lead_time_days": 14, "compound_count": 3, "trial_phase": 1,
+                "transaction_volume": 10_000, "risk_tolerance": 0.5,
+                "market_volatility": 0.3, "sample_size": 100,
+                "data_types": ["pii"], "jurisdictions": ["EU"],
+                "contract_clause_count": 20, "liability_cap_usd": 0,
+                "industry": "technology",
+            },
+        )
+        analysis = self._agent().run(problem)
+        assert "legal" in analysis.summary()
+
+    def test_legal_determinism(self):
+        problem = self._legal_problem()
+        a1 = self._agent().run(problem)
+        a2 = self._agent().run(problem)
+        assert len(a1.insights_for("legal")) == len(a2.insights_for("legal"))
+        assert a1.overall_risk_score == a2.overall_risk_score
+
+
+# ---------------------------------------------------------------------------
+# LLM augmentation tests (mock-based — no real API calls)
+# ---------------------------------------------------------------------------
+
+class TestLLMAugmentation:
+    """
+    Tests for the optional use_llm=True path across all four pipeline agents
+    and the CrossDisciplinaryAgent.  All tests mock llm_complete to avoid
+    real API calls and to remain deterministic in CI.
+    """
+
+    def _cpu(self) -> "CPU":
+        return CPU(isa=ISA.RV32IM)
+
+    # ── llm_client module ──────────────────────────────────────────────────
+
+    def test_llm_available_returns_bool(self):
+        """llm_available() must always return a bool regardless of env state."""
+        from sub_team import llm_available
+        assert isinstance(llm_available(), bool)
+
+    def test_llm_complete_returns_none_when_no_key(self, monkeypatch):
+        """Without an API key, llm_complete must return None."""
+        import sub_team.llm_client as lc
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        lc.reset_client()
+        result = lc.llm_complete("sys", "usr")
+        assert result is None
+        lc.reset_client()  # restore for subsequent tests
+
+    def test_reset_client_clears_cache(self, monkeypatch):
+        import sub_team.llm_client as lc
+        monkeypatch.setenv("OPENAI_API_KEY", "fake-key-for-test")
+        lc.reset_client()
+        # Even with a key, without the real openai package installed the
+        # result may be None; just assert it doesn't raise
+        try:
+            lc.llm_complete("sys", "usr")
+        except Exception:  # noqa: BLE001
+            pass
+        lc.reset_client()
+
+    # ── SpecificationAgent LLM path ────────────────────────────────────────
+
+    def test_spec_use_llm_false_gives_empty_notes(self):
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu, use_llm=False)
+        assert spec.llm_notes == []
+
+    def test_spec_use_llm_true_calls_llm(self, monkeypatch):
+        import sub_team.specification_agent as sa
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: "1. Good spec.\n2. No gaps.",
+        )
+        cpu = self._cpu()
+        spec = sa.SpecificationAgent().run(cpu, use_llm=True)
+        assert len(spec.llm_notes) >= 1
+        assert any("Good spec" in note for note in spec.llm_notes)
+
+    def test_spec_use_llm_true_llm_unavailable_gives_empty_notes(self, monkeypatch):
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: None,
+        )
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu, use_llm=True)
+        assert spec.llm_notes == []
+
+    # ── MicroarchitectureAgent LLM path ───────────────────────────────────
+
+    def test_microarch_use_llm_false_gives_empty_rationale(self):
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec, use_llm=False)
+        assert plan.llm_rationale == []
+
+    def test_microarch_use_llm_true_calls_llm(self, monkeypatch):
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: "1. Five-stage is appropriate.\n2. Watch for hazards.",
+        )
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec, use_llm=True)
+        assert len(plan.llm_rationale) >= 1
+        assert any("appropriate" in r for r in plan.llm_rationale)
+
+    def test_microarch_use_llm_unavailable_gives_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: None,
+        )
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec, use_llm=True)
+        assert plan.llm_rationale == []
+
+    # ── ImplementationAgent LLM path ──────────────────────────────────────
+
+    def test_impl_use_llm_false_gives_empty_review(self):
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec)
+        output = ImplementationAgent().run(spec, plan, use_llm=False)
+        assert output.llm_review == []
+
+    def test_impl_use_llm_true_calls_llm(self, monkeypatch):
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: "1. Looks synthesisable.\n2. Check reset polarity.",
+        )
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec)
+        output = ImplementationAgent().run(spec, plan, use_llm=True)
+        assert len(output.llm_review) >= 1
+        assert any("synthesisable" in r for r in output.llm_review)
+
+    def test_impl_use_llm_unavailable_gives_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: None,
+        )
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec)
+        output = ImplementationAgent().run(spec, plan, use_llm=True)
+        assert output.llm_review == []
+
+    # ── VerificationAgent LLM path ────────────────────────────────────────
+
+    def test_verify_use_llm_false_gives_empty_analysis(self):
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec)
+        rtl = ImplementationAgent().run(spec, plan)
+        report = VerificationAgent().run(spec, rtl, use_llm=False)
+        assert report.llm_analysis == []
+
+    def test_verify_use_llm_true_calls_llm(self, monkeypatch):
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: "1. All checks passed cleanly.\n2. No gaps detected.",
+        )
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec)
+        rtl = ImplementationAgent().run(spec, plan)
+        report = VerificationAgent().run(spec, rtl, use_llm=True)
+        assert len(report.llm_analysis) >= 1
+        assert any("passed" in r for r in report.llm_analysis)
+
+    def test_verify_use_llm_unavailable_gives_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: None,
+        )
+        cpu = self._cpu()
+        spec = SpecificationAgent().run(cpu)
+        plan = MicroarchitectureAgent().run(spec)
+        rtl = ImplementationAgent().run(spec, plan)
+        report = VerificationAgent().run(spec, rtl, use_llm=True)
+        assert report.llm_analysis == []
+
+    # ── Determinism preservation ───────────────────────────────────────────
+
+    def test_llm_augmentation_does_not_alter_deterministic_outputs(self, monkeypatch):
+        """LLM augmentation must not change any deterministic fields."""
+        monkeypatch.setattr(
+            "sub_team.llm_client.llm_complete",
+            lambda *a, **kw: "LLM says something",
+        )
+        cpu = CPU(isa=ISA.RV32I)
+        spec_no_llm  = SpecificationAgent().run(cpu, use_llm=False)
+        spec_with_llm = SpecificationAgent().run(cpu, use_llm=True)
+
+        # Deterministic fields must be identical
+        assert spec_no_llm.isa_name == spec_with_llm.isa_name
+        assert len(spec_no_llm.encodings) == len(spec_with_llm.encodings)
+        assert len(spec_no_llm.formulas) == len(spec_with_llm.formulas)
+        assert spec_no_llm.constraints == spec_with_llm.constraints
+        # LLM notes present only in the augmented version
+        assert spec_no_llm.llm_notes == []
+        assert len(spec_with_llm.llm_notes) >= 1

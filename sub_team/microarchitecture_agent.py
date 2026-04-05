@@ -16,6 +16,18 @@ Constraint-based template selection (CEGIS-inspired).  Templates for common
 CPU types are stored as parameterised skeletons; the agent selects and
 instantiates the matching template deterministically from the constraints.
 Same constraints → same architecture every time.
+
+LLM augmentation (optional)
+----------------------------
+When ``use_llm=True`` is passed to ``MicroarchitectureAgent.run()`` **and** an
+API key is available, the LLM is asked to:
+
+  * Justify the chosen pipeline template against the constraints.
+  * Identify potential micro-architectural risks or trade-offs.
+  * Suggest one or two alternative configurations the designer might consider.
+
+Results are stored in ``MicroarchPlan.llm_rationale`` (list of strings) and
+never alter the deterministic stage/hazard/memory configuration.
 """
 
 from __future__ import annotations
@@ -62,6 +74,8 @@ class MicroarchPlan:
     memory: Optional[MemoryConfig] = None
     branch_predictor: Optional[str] = None
     notes: List[str] = field(default_factory=list)
+    # LLM-generated rationale / alternative suggestions (empty when not used)
+    llm_rationale: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
         stage_names = " → ".join(s.name for s in self.stages)
@@ -87,6 +101,8 @@ class MicroarchPlan:
             )
         for note in self.notes:
             lines.append(f"  Note: {note}")
+        if self.llm_rationale:
+            lines.append(f"  LLM rationale   : {len(self.llm_rationale)} items")
         return "\n".join(lines)
 
 
@@ -207,6 +223,44 @@ _TEMPLATE_MAP: Dict[str, Callable] = {
 
 
 # ---------------------------------------------------------------------------
+# LLM augmentation helper
+# ---------------------------------------------------------------------------
+
+def _llm_augment_plan(spec: FormalSpec, plan: "MicroarchPlan") -> List[str]:
+    """
+    Ask the LLM to justify the chosen pipeline and suggest alternatives.
+    Returns a list of rationale strings, or empty list if unavailable.
+    """
+    from .llm_client import llm_complete
+
+    system = (
+        "You are a senior CPU microarchitect. Given an ISA formal spec and the "
+        "pipeline template that was deterministically selected, provide:\n"
+        "1. A brief justification for why this pipeline template was appropriate.\n"
+        "2. Any micro-architectural risks or bottlenecks to watch for.\n"
+        "3. One or two alternative pipeline configurations worth considering.\n"
+        "Be concise — respond as a numbered list (max 5 items)."
+    )
+
+    stage_names = " → ".join(s.name for s in plan.stages)
+    forwarding = plan.hazard_unit.forwarding_enabled if plan.hazard_unit else False
+    user = (
+        f"ISA: {spec.isa_name}\n"
+        f"Selected pipeline: {plan.pipeline_name}\n"
+        f"Stages: {stage_names}\n"
+        f"Forwarding enabled: {forwarding}\n"
+        f"Branch predictor: {plan.branch_predictor or 'none'}\n"
+        f"Constraints: {spec.constraints}\n\n"
+        "Provide your microarchitecture rationale."
+    )
+
+    raw = llm_complete(system, user, max_tokens=512, temperature=0.2)
+    if not raw:
+        return []
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
@@ -219,12 +273,25 @@ class MicroarchitectureAgent:
         agent = MicroarchitectureAgent()
         plan  = agent.run(formal_spec)
         print(plan.summary())
+
+    LLM augmentation::
+
+        plan = agent.run(formal_spec, use_llm=True)
+        # plan.llm_rationale contains justification and alternatives from LLM
     """
 
-    def run(self, spec: FormalSpec) -> MicroarchPlan:
+    def run(self, spec: FormalSpec, *, use_llm: bool = False) -> MicroarchPlan:
         """
         Select the appropriate pipeline template based on the constraints
         embedded in *spec* and return the instantiated MicroarchPlan.
+
+        Parameters
+        ----------
+        spec : FormalSpec
+            Formal specification produced by SpecificationAgent.
+        use_llm : bool
+            When True and an API key is available, populate
+            ``MicroarchPlan.llm_rationale`` with LLM-generated analysis.
         """
         pipeline_name: str = spec.constraints.get("pipeline", "FIVE_STAGE")
         forwarding: bool = bool(spec.constraints.get("forwarding", True))
@@ -238,5 +305,12 @@ class MicroarchitectureAgent:
 
         # FIVE_STAGE template accepts forwarding flag; others do not
         if pipeline_name == "FIVE_STAGE":
-            return builder(spec, forwarding)
-        return builder(spec)
+            plan = builder(spec, forwarding)
+        else:
+            plan = builder(spec)
+
+        # Optional LLM augmentation
+        if use_llm:
+            plan.llm_rationale = _llm_augment_plan(spec, plan)
+
+        return plan

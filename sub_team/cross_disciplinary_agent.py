@@ -5,7 +5,7 @@ Responsibility
 --------------
 Input  : A DomainProblem describing a multi-domain scenario.
 Output : A CrossDisciplinaryAnalysis report containing:
-           - Per-domain insights (logistics, biotech, fintech, probability)
+           - Per-domain insights (logistics, biotech, fintech, probability, legal)
            - Cross-domain synergies identified between disciplines
            - Probability-grounded risk scores
            - Ranked recommendations
@@ -21,6 +21,8 @@ Supported domains
 - biotech      : drug-pipeline analysis, trial-phase risk, compound screening
 - fintech      : transaction-risk modelling, liquidity, regulatory scoring
 - probability  : distribution fitting, confidence intervals, statistical power
+- legal        : regulatory mapping (GDPR/HIPAA/SOC2/PCI-DSS), contract-risk
+                 scoring, compliance gap analysis
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from typing import Dict, List
 # Supported domain names
 # ---------------------------------------------------------------------------
 
-SUPPORTED_DOMAINS: List[str] = ["logistics", "biotech", "fintech", "probability"]
+SUPPORTED_DOMAINS: List[str] = ["logistics", "biotech", "fintech", "probability", "legal"]
 
 # ---------------------------------------------------------------------------
 # Input data structure
@@ -81,6 +83,17 @@ class DomainProblem:
     confidence_level : float      Desired confidence level, 0.0–1.0 (default 0.95)
     distribution : str            Assumed distribution ("normal", "poisson", "binomial")
                                   (default "normal")
+
+    Legal parameters
+    ----------------
+    data_types : list[str]        Types of data processed, e.g. ["pii", "health", "financial"]
+                                  (default [])
+    jurisdictions : list[str]     Operating jurisdictions, e.g. ["EU", "US", "UK"]
+                                  (default [])
+    contract_clause_count : int   Number of clauses in the primary contract (default 20)
+    liability_cap_usd : float     Liability cap in USD (0 = uncapped) (default 0)
+    industry : str                Industry sector: "healthcare", "finance", "retail",
+                                  "technology", "logistics", "general" (default "general")
     """
 
     name: str
@@ -491,9 +504,213 @@ def _analyse_probability(params: Dict) -> List[DomainInsight]:
     return insights
 
 
-# ---------------------------------------------------------------------------
-# Cross-domain link inference
-# ---------------------------------------------------------------------------
+# ── Legal ──────────────────────────────────────────────────────────────────
+
+# Regulation applicability matrix: regulation → (required_data_types, required_jurisdictions)
+# An empty set means "always applicable when the other dimension matches"
+_REGULATION_RULES: List[Dict] = [
+    {
+        "name": "GDPR",
+        "data_types": {"pii"},
+        "jurisdictions": {"EU", "EEA", "UK"},
+        "description": (
+            "General Data Protection Regulation applies to processing of EU/UK "
+            "residents' personal data. Requires Data Protection Impact Assessments, "
+            "explicit consent mechanisms, and 72-hour breach notification."
+        ),
+        "risk_level": "high",
+    },
+    {
+        "name": "HIPAA",
+        "data_types": {"health", "phi"},
+        "jurisdictions": {"US"},
+        "description": (
+            "Health Insurance Portability and Accountability Act applies to "
+            "Protected Health Information in the US. Mandates technical safeguards, "
+            "BAAs with vendors, and annual security risk assessments."
+        ),
+        "risk_level": "high",
+    },
+    {
+        "name": "PCI-DSS",
+        "data_types": {"financial", "payment", "card"},
+        "jurisdictions": set(),   # global — no jurisdiction restriction
+        "description": (
+            "Payment Card Industry Data Security Standard applies to any entity "
+            "storing, processing, or transmitting card data. Requires quarterly "
+            "vulnerability scans and annual penetration testing."
+        ),
+        "risk_level": "high",
+    },
+    {
+        "name": "SOC2",
+        "data_types": {"pii", "financial", "health"},
+        "jurisdictions": set(),   # global — no jurisdiction restriction
+        "description": (
+            "SOC 2 Type II audit covering Security, Availability, Processing "
+            "Integrity, Confidentiality, and Privacy criteria. Typically required "
+            "by enterprise customers in SaaS and cloud services."
+        ),
+        "risk_level": "medium",
+    },
+    {
+        "name": "CCPA",
+        "data_types": {"pii"},
+        "jurisdictions": {"US"},
+        "description": (
+            "California Consumer Privacy Act applies to for-profit entities "
+            "meeting revenue/data thresholds that process California residents' "
+            "personal information. Requires opt-out mechanisms and privacy notices."
+        ),
+        "risk_level": "medium",
+    },
+]
+
+# Industry-specific compliance obligations
+_INDUSTRY_OBLIGATIONS: Dict[str, List[str]] = {
+    "healthcare": [
+        "FDA 21 CFR Part 11 electronic records rules may apply to clinical systems.",
+        "State medical privacy laws may impose stricter obligations than HIPAA.",
+    ],
+    "finance": [
+        "MiFID II / Dodd-Frank reporting obligations for financial instruments.",
+        "AML/KYC regulatory requirements under FATF recommendations.",
+        "Basel III capital adequacy rules if operating as a regulated bank.",
+    ],
+    "retail": [
+        "Consumer protection laws (EU Consumer Rights Directive, FTC Act) apply.",
+        "WCAG 2.1 AA accessibility compliance required in several jurisdictions.",
+    ],
+    "technology": [
+        "EU AI Act obligations may apply to high-risk AI system deployments.",
+        "NIS2 Directive cybersecurity obligations for critical digital infrastructure.",
+    ],
+    "logistics": [
+        "Customs/trade compliance obligations (AEO, C-TPAT) for cross-border freight.",
+        "ADR/IMDG dangerous-goods transport regulations may apply.",
+    ],
+    "general": [],
+}
+
+
+def _analyse_legal(params: Dict) -> List[DomainInsight]:
+    raw_data_types: object = _p(params, "data_types", [])
+    raw_jurisdictions: object = _p(params, "jurisdictions", [])
+    clause_count: int = int(_p(params, "contract_clause_count", 20))
+    liability_cap: float = float(_p(params, "liability_cap_usd", 0))
+    industry: str = str(_p(params, "industry", "general")).lower()
+
+    # Normalise to sets of lowercase strings
+    data_types: set = {str(d).lower() for d in (raw_data_types or [])}
+    jurisdictions: set = {str(j).upper() for j in (raw_jurisdictions or [])}
+
+    insights: List[DomainInsight] = []
+
+    # ── Regulatory mapping ──────────────────────────────────────────────────
+    applicable_regs: List[str] = []
+    for rule in _REGULATION_RULES:
+        req_data: set = rule["data_types"]
+        req_juri: set = rule["jurisdictions"]
+
+        data_match = (not req_data) or bool(req_data & data_types)
+        juri_match = (not req_juri) or bool(req_juri & jurisdictions)
+
+        if data_match and juri_match:
+            applicable_regs.append(rule["name"])
+            insights.append(DomainInsight(
+                domain="legal",
+                finding=(
+                    f"{rule['name']} applies: {rule['description']}"
+                ),
+                confidence=0.88,
+                risk_level=rule["risk_level"],
+                related_domains=["fintech", "biotech"],
+            ))
+
+    if not applicable_regs:
+        insights.append(DomainInsight(
+            domain="legal",
+            finding=(
+                "No major sector-specific regulations detected for the given "
+                "data types and jurisdictions. Ensure general data protection "
+                "and consumer-protection laws are still reviewed."
+            ),
+            confidence=0.70,
+            risk_level="low",
+            related_domains=[],
+        ))
+
+    # ── Contract risk scoring ───────────────────────────────────────────────
+    # Heuristic: more clauses + uncapped liability = higher risk
+    clause_risk_score = min(clause_count / 100.0, 1.0)
+    liability_risk_score = 0.0 if liability_cap > 0 else 0.6
+
+    contract_risk = (clause_risk_score + liability_risk_score) / 2.0
+    if contract_risk > 0.5:
+        contract_risk_level = "high"
+        contract_note = (
+            "High contract risk: consider capping liability exposure and "
+            "simplifying clause structure to reduce ambiguity and dispute risk."
+        )
+    elif contract_risk > 0.25:
+        contract_risk_level = "medium"
+        contract_note = (
+            "Moderate contract risk: review indemnification clauses and "
+            "ensure governing-law / dispute-resolution provisions are clear."
+        )
+    else:
+        contract_risk_level = "low"
+        contract_note = (
+            "Contract risk appears manageable. Periodic legal review recommended "
+            "as regulatory landscape evolves."
+        )
+
+    insights.append(DomainInsight(
+        domain="legal",
+        finding=(
+            f"Contract risk score = {contract_risk:.2f} "
+            f"(clauses={clause_count}, liability cap "
+            f"{'= ${:,.0f}'.format(liability_cap) if liability_cap > 0 else '= uncapped'}): "
+            f"{contract_note}"
+        ),
+        confidence=0.78,
+        risk_level=contract_risk_level,
+        related_domains=["fintech"],
+    ))
+
+    # ── Compliance gap score ────────────────────────────────────────────────
+    # Each applicable regulation that requires significant audit work adds risk
+    high_burden_regs = {"GDPR", "HIPAA", "PCI-DSS"}
+    burden_regs = [r for r in applicable_regs if r in high_burden_regs]
+    gap_score = min(len(burden_regs) * 0.35, 1.0)
+    gap_risk = "high" if gap_score > 0.6 else "medium" if gap_score > 0.3 else "low"
+
+    if burden_regs:
+        insights.append(DomainInsight(
+            domain="legal",
+            finding=(
+                f"Compliance gap risk: {', '.join(burden_regs)} each require "
+                "substantial audit, documentation, and operational controls. "
+                f"Estimated compliance gap score = {gap_score:.2f}. "
+                "Recommend engaging a qualified compliance officer or external auditor."
+            ),
+            confidence=0.82,
+            risk_level=gap_risk,
+            related_domains=["fintech", "biotech", "logistics"],
+        ))
+
+    # ── Industry-specific obligations ───────────────────────────────────────
+    obligations = _INDUSTRY_OBLIGATIONS.get(industry, _INDUSTRY_OBLIGATIONS["general"])
+    for obligation in obligations:
+        insights.append(DomainInsight(
+            domain="legal",
+            finding=obligation,
+            confidence=0.75,
+            risk_level="medium",
+            related_domains=[],
+        ))
+
+    return insights
 
 _CROSS_DOMAIN_RULES: List[Dict] = [
     {
@@ -543,6 +760,43 @@ _CROSS_DOMAIN_RULES: List[Dict] = [
             "Cold-chain management and temperature-controlled distribution are critical "
             "for biologic and cell-therapy products; logistics failures directly affect "
             "biotech outcomes."
+        ),
+    },
+    # ── Legal cross-domain links ────────────────────────────────────────────
+    {
+        "required": {"legal", "fintech"},
+        "link_type": "dependency",
+        "description": (
+            "Financial regulatory capital requirements (Basel III, MiFID II, Dodd-Frank) "
+            "directly constrain fintech product design, reporting obligations, and "
+            "permissible risk-taking; legal compliance is a hard dependency for fintech operations."
+        ),
+    },
+    {
+        "required": {"legal", "biotech"},
+        "link_type": "dependency",
+        "description": (
+            "FDA / EMA clinical trial regulations, GCP guidelines, and product-liability law "
+            "are non-negotiable gating factors for biotech drug development; failure to comply "
+            "can result in trial suspension or market withdrawal."
+        ),
+    },
+    {
+        "required": {"legal", "logistics"},
+        "link_type": "shared_risk",
+        "description": (
+            "Customs, trade sanctions (OFAC, EU sanctions), and dangerous-goods transport law "
+            "create legal exposure that is intrinsically linked to logistics operations; "
+            "compliance failures can halt shipments and trigger significant penalties."
+        ),
+    },
+    {
+        "required": {"legal", "probability"},
+        "link_type": "synergy",
+        "description": (
+            "Probabilistic risk assessment frameworks (Monte Carlo, fault-trees) can quantify "
+            "legal compliance exposure, enabling data-driven prioritisation of regulatory "
+            "remediation efforts."
         ),
     },
 ]
@@ -610,26 +864,30 @@ _DOMAIN_ANALYSERS = {
     "biotech":     _analyse_biotech,
     "fintech":     _analyse_fintech,
     "probability": _analyse_probability,
+    "legal":       _analyse_legal,
 }
 
 
 class CrossDisciplinaryAgent:
     """
     Deterministically analyses a multi-domain problem by applying rule-based
-    knowledge from logistics, biotech, fintech, and probability.
+    knowledge from logistics, biotech, fintech, probability, and legal.
 
     Usage::
 
         agent    = CrossDisciplinaryAgent()
         problem  = DomainProblem(
             name="pharma-cold-chain",
-            domains=["logistics", "biotech", "probability"],
+            domains=["logistics", "biotech", "probability", "legal"],
             parameters={
                 "units": 5000,
                 "demand_variability": 0.4,
                 "compound_count": 3,
                 "trial_phase": 2,
                 "sample_size": 200,
+                "data_types": ["health", "pii"],
+                "jurisdictions": ["EU", "US"],
+                "industry": "healthcare",
             },
         )
         analysis = agent.run(problem)

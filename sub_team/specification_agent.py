@@ -14,12 +14,27 @@ Method
 Formal grammar-based parsing instead of neural token generation.  All
 production rules are deterministic: the same CPU description always yields
 the same FormalSpec.
+
+LLM augmentation (optional)
+----------------------------
+When ``use_llm=True`` is passed to ``SpecificationAgent.run()`` **and** an
+OpenRouter API key is present in the environment, the agent additionally asks
+the LLM to:
+
+  * Summarise the ISA constraints in plain English.
+  * Flag any edge-cases or gaps in the deterministic register/encoding tables.
+  * Provide richer pre/post-condition descriptions for complex instructions.
+
+The LLM output is stored in ``FormalSpec.llm_notes`` (a list of strings) and
+does **not** modify the deterministic register map, encodings, or formulas.
+If the LLM is unavailable the field is simply empty and everything else is
+unchanged.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .cpu import CPU, ISA
 
@@ -72,6 +87,8 @@ class FormalSpec:
     encodings: List[InstructionEncoding] = field(default_factory=list)
     formulas: List[LogicFormula] = field(default_factory=list)
     constraints: Dict[str, object] = field(default_factory=dict)
+    # LLM-generated supplementary notes (empty when LLM is not used / unavailable)
+    llm_notes: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
         lines = [
@@ -81,6 +98,8 @@ class FormalSpec:
             f"  Formulas   : {len(self.formulas)} logic assertions",
             f"  Constraints: {list(self.constraints.keys())}",
         ]
+        if self.llm_notes:
+            lines.append(f"  LLM notes  : {len(self.llm_notes)} items")
         return "\n".join(lines)
 
 
@@ -202,6 +221,44 @@ def _make_formula(mnemonic: str, fmt: str) -> LogicFormula:
 
 
 # ---------------------------------------------------------------------------
+# LLM augmentation helper
+# ---------------------------------------------------------------------------
+
+def _llm_augment_spec(spec: "FormalSpec", cpu: "CPU") -> List[str]:
+    """
+    Ask the LLM for supplementary analysis of the generated FormalSpec.
+    Returns a list of note strings, or an empty list if LLM is unavailable.
+    """
+    from .llm_client import llm_complete  # local import keeps dependency soft
+
+    system = (
+        "You are an expert CPU architect and hardware verification engineer. "
+        "Analyse the following ISA formal specification and provide concise "
+        "observations about correctness, completeness, edge-cases, and any "
+        "improvements or risks. Respond as a numbered list (1–5 items max)."
+    )
+
+    mnemonic_list = ", ".join(e.mnemonic for e in spec.encodings)
+    user = (
+        f"ISA: {spec.isa_name}\n"
+        f"Pipeline: {spec.constraints.get('pipeline', 'unknown')}\n"
+        f"Forwarding: {spec.constraints.get('forwarding', 'unknown')}\n"
+        f"Register count: {len(spec.register_map.registers)}\n"
+        f"Instructions ({len(spec.encodings)}): {mnemonic_list}\n"
+        f"Constraints: {spec.constraints}\n\n"
+        "Please provide your analysis."
+    )
+
+    raw = llm_complete(system, user, max_tokens=512, temperature=0.2)
+    if not raw:
+        return []
+
+    # Split numbered list into individual notes; strip blank lines
+    notes = [line.strip() for line in raw.splitlines() if line.strip()]
+    return notes
+
+
+# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
@@ -214,12 +271,27 @@ class SpecificationAgent:
         agent = SpecificationAgent()
         spec  = agent.run(cpu)
         print(spec.summary())
+
+    LLM augmentation::
+
+        spec = agent.run(cpu, use_llm=True)
+        # spec.llm_notes contains plain-English ISA analysis from the LLM
     """
 
-    def run(self, cpu: CPU) -> FormalSpec:
+    def run(self, cpu: CPU, *, use_llm: bool = False) -> FormalSpec:
         """
         Main entry point.  Parses the CPU specification and returns a
         FormalSpec.  Raises ValueError for unsupported ISAs.
+
+        Parameters
+        ----------
+        cpu : CPU
+            The CPU specification to parse.
+        use_llm : bool
+            When True and an API key is available, augment the spec with
+            LLM-generated notes stored in ``FormalSpec.llm_notes``.
+            The deterministic register map, encodings, and formulas are
+            never modified by the LLM path.
         """
         isa = cpu.isa
         if isa not in _ISA_REGISTER_TABLE:
@@ -261,5 +333,9 @@ class SpecificationAgent:
         if cpu.branch_predictor is not None:
             spec.constraints["branch_predictor"] = str(cpu.branch_predictor)
         spec.constraints.update(cpu.extra_constraints)
+
+        # 5. Optional LLM augmentation
+        if use_llm:
+            spec.llm_notes = _llm_augment_spec(spec, cpu)
 
         return spec

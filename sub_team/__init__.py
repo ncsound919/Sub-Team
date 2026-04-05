@@ -9,7 +9,13 @@ Four collaborative agents:
 
 Cross-disciplinary analysis agent:
   - CrossDisciplinaryAgent   : Rule-based analysis across logistics, biotech,
-                               fintech and probability domains
+                               fintech, probability, and legal domains
+
+LLM augmentation (optional):
+  - All four pipeline agents accept ``use_llm=True`` to obtain supplementary
+    LLM-generated notes via OpenRouter (requires OPENAI_API_KEY or
+    OPENROUTER_API_KEY in the environment).
+  - llm_available()          : Returns True if an API key is configured.
 """
 
 from .specification_agent import SpecificationAgent
@@ -25,6 +31,7 @@ from .cross_disciplinary_agent import (
     CrossDomainLink,
     SUPPORTED_DOMAINS,
 )
+from .llm_client import llm_available
 
 __all__ = [
     "SpecificationAgent",
@@ -41,4 +48,5 @@ __all__ = [
     "DomainInsight",
     "CrossDomainLink",
     "SUPPORTED_DOMAINS",
+    "llm_available",
 ]
