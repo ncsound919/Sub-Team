@@ -11,6 +11,10 @@ Cross-disciplinary analysis agent:
   - CrossDisciplinaryAgent   : Rule-based analysis across logistics, biotech,
                                fintech, probability, and legal domains
 
+Business intelligence agent:
+  - BusinessAgent            : Rule-based analysis across finance and sales domains
+                               with optional Stripe / HubSpot data connectors
+
 LLM augmentation (optional):
   - All four pipeline agents accept ``use_llm=True`` to obtain supplementary
     LLM-generated notes via OpenRouter (requires OPENAI_API_KEY or
@@ -31,6 +35,13 @@ from .cross_disciplinary_agent import (
     CrossDomainLink,
     SUPPORTED_DOMAINS,
 )
+from .business_agent import (
+    BusinessAgent,
+    BusinessProblem,
+    BusinessAnalysis,
+    BusinessInsight,
+    BUSINESS_DOMAINS,
+)
 from .llm_client import llm_available
 
 __all__ = [
@@ -48,5 +59,10 @@ __all__ = [
     "DomainInsight",
     "CrossDomainLink",
     "SUPPORTED_DOMAINS",
+    "BusinessAgent",
+    "BusinessProblem",
+    "BusinessAnalysis",
+    "BusinessInsight",
+    "BUSINESS_DOMAINS",
     "llm_available",
 ]

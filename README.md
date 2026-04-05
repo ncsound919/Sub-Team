@@ -170,6 +170,90 @@ print(result.cross_domain_links)  # e.g. legal ↔ fintech dependency
 
 ---
 
+## Business Agent
+
+`BusinessAgent` analyses business problems across **finance** and **sales** domains,
+producing risk-scored insights, cross-domain dependency links, and ranked
+recommendations.  Like all Sub-Team agents, it is **deterministic** by default.
+
+### Supported Domains
+
+| Domain | Metrics Analysed |
+|--------|-----------------|
+| `finance` | MRR growth, gross margin, runway, ARR consistency, COGS efficiency |
+| `sales` | Pipeline coverage, win rate, sales cycle, churn, LTV:CAC, NDR, expansion mix, logo vs revenue churn |
+
+### Quick Start
+
+```python
+from sub_team import BusinessAgent, BusinessProblem
+
+problem = BusinessProblem(
+    name="q1-review",
+    domains=["finance", "sales"],
+    parameters={
+        "mrr_usd": 50000,
+        "mrr_growth_pct": 8.0,
+        "gross_margin_pct": 72.0,
+        "burn_rate_usd": 30000,
+        "cash_balance_usd": 500000,
+        "pipeline_value_usd": 600000,
+        "quota_usd": 150000,
+        "win_rate_pct": 30.0,
+        "churn_rate_pct": 3.0,
+        "ltv_usd": 30000,
+        "cac_usd": 8000,
+        "ndr_pct": 105.0,
+    },
+)
+
+analysis = BusinessAgent().run(problem)
+print(analysis.summary())
+print(analysis.overall_risk_score)       # 0.0 - 1.0
+print(analysis.insights_for("finance"))  # Finance-specific insights
+print(analysis.links_involving("sales")) # Cross-domain links for sales
+```
+
+### Connectors (Live Data Ingestion)
+
+Two connectors fetch real-time data from external APIs and return parameter
+dictionaries that plug directly into `BusinessProblem.parameters`:
+
+| Connector | API | Env Variable | Returns |
+|-----------|-----|-------------|---------|
+| `StripeConnector` | Stripe Billing & Balance | `STRIPE_API_KEY` | `mrr_usd`, `arr_usd`, `cash_balance_usd` |
+| `HubSpotConnector` | HubSpot CRM Deals | `HUBSPOT_API_KEY` | `pipeline_value_usd`, `win_rate_pct`, `avg_deal_size_usd`, `avg_sales_cycle_days` |
+
+Both connectors degrade gracefully: missing API keys or network errors return
+`None` without raising exceptions.
+
+```python
+from sub_team.connectors import StripeConnector, HubSpotConnector
+
+stripe_data = StripeConnector().fetch()   # or StripeConnector(api_key="sk_...")
+hubspot_data = HubSpotConnector().fetch()
+
+params = {}
+if stripe_data:
+    params.update(stripe_data)
+if hubspot_data:
+    params.update(hubspot_data)
+
+problem = BusinessProblem(name="live-review", parameters=params)
+analysis = BusinessAgent().run(problem)
+```
+
+### LLM Augmentation
+
+Like all agents, `BusinessAgent` supports optional LLM commentary:
+
+```python
+analysis = BusinessAgent().run(problem, use_llm=True)
+print(analysis.llm_commentary)  # List[str] — strategic observations
+```
+
+---
+
 ## Uplift Agent Integration
 
 Sub-Team is wrapped by 5 tools in the Uplift Agent, allowing the full CPU design pipeline to be invoked directly from Uplift Agent conversations:
