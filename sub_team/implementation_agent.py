@@ -69,8 +69,11 @@ class RTLOutput:
         os.makedirs(directory, exist_ok=True)
         paths: List[str] = []
         for m in self.modules:
+            # Sanitize module name to prevent path traversal
+            if os.sep in m.name or '/' in m.name or '\\' in m.name or '..' in m.name:
+                raise ValueError(f"Unsafe module name: {m.name!r}")
             path = os.path.join(directory, f"{m.name}.v")
-            with open(path, "w") as fh:
+            with open(path, "w", encoding="utf-8") as fh:
                 fh.write(m.source)
             paths.append(path)
         return paths
@@ -98,6 +101,8 @@ def _alu_source(data_width: int, has_mul: bool) -> str:
     `ALU_MUL:  result = $signed(a) * $signed(b);
     `ALU_DIV:  result = (b != 0) ? $signed(a) / $signed(b) : {DW{1'b1}};
     `ALU_REM:  result = (b != 0) ? $signed(a) % $signed(b) : a;"""
+
+    shift_bits = "5:0" if data_width == 64 else "4:0"
 
     return f"""\
 `define ALU_ADD  4'd0
@@ -127,9 +132,9 @@ module alu #(parameter DW = {data_width}) (
             `ALU_XOR:  result = a ^ b;
             `ALU_OR:   result = a | b;
             `ALU_AND:  result = a & b;
-            `ALU_SLL:  result = a << b[4:0];
-            `ALU_SRL:  result = a >> b[4:0];
-            `ALU_SRA:  result = $signed(a) >>> b[4:0];
+            `ALU_SLL:  result = a << b[{shift_bits}];
+            `ALU_SRL:  result = a >> b[{shift_bits}];
+            `ALU_SRA:  result = $signed(a) >>> b[{shift_bits}];
             `ALU_SLT:  result = {{{{(DW-1){{1'b0}}}}, ($signed(a) < $signed(b))}};
             `ALU_SLTU: result = {{{{(DW-1){{1'b0}}}}, (a < b)}};{mul_block}
             default:   result = {{DW{{1'b0}}}};
@@ -237,9 +242,9 @@ def _pipeline_top_source(
     if has_mul:
         mul_decode = """
         // M-extension
-        (opcode == 7'b0110011 && funct7[0] == 1'b1 && funct3 == 3'b000) ? 4'd8 : // MUL
-        (opcode == 7'b0110011 && funct7[0] == 1'b1 && funct3 == 3'b100) ? 4'd9 : // DIV
-        (opcode == 7'b0110011 && funct7[0] == 1'b1 && funct3 == 3'b110) ? 4'd10: // REM"""
+        (opcode == 7'b0110011 && funct7[0] == 1'b1 && funct3 == 3'b000) ? 4'd10: // MUL
+        (opcode == 7'b0110011 && funct7[0] == 1'b1 && funct3 == 3'b100) ? 4'd11: // DIV
+        (opcode == 7'b0110011 && funct7[0] == 1'b1 && funct3 == 3'b110) ? 4'd12: // REM"""
     return f"""\
 // Auto-generated top-level pipeline for {isa_name}
 // Pipeline: {stages_comment}
@@ -388,26 +393,32 @@ module cpu_{isa_name.lower()} #(parameter DW = {data_width}) (
     assign dmem_wdata = rs2_data;
     assign dmem_we    = (opcode == 7'b0100011);  // STORE
 
-    // Register write-enable: any non-store instruction that writes rd != x0
-    assign reg_we  = !dmem_we && (rd != 5'b0);
+    // Register write-enable: any non-store, non-branch instruction that writes rd != x0
+    assign reg_we  = !dmem_we && !is_branch && (rd != 5'b0);
 
     // ALU operation decode (RV32I{"/M" if has_mul else ""})
     assign alu_op =
         // R-type (register-register) arithmetic/logical
         (opcode == 7'b0110011 && funct3 == 3'b000 && funct7[5] == 1'b0) ? 4'd0 : // ADD
         (opcode == 7'b0110011 && funct3 == 3'b000 && funct7[5] == 1'b1) ? 4'd1 : // SUB
-        (opcode == 7'b0110011 && funct3 == 3'b111)                      ? 4'd2 : // AND
+        (opcode == 7'b0110011 && funct3 == 3'b100)                      ? 4'd2 : // XOR
         (opcode == 7'b0110011 && funct3 == 3'b110)                      ? 4'd3 : // OR
-        (opcode == 7'b0110011 && funct3 == 3'b100)                      ? 4'd4 : // XOR
-        (opcode == 7'b0110011 && funct3 == 3'b010)                      ? 4'd5 : // SLT
-        (opcode == 7'b0110011 && funct3 == 3'b011)                      ? 4'd6 : // SLTU
+        (opcode == 7'b0110011 && funct3 == 3'b111)                      ? 4'd4 : // AND
+        (opcode == 7'b0110011 && funct3 == 3'b001)                      ? 4'd5 : // SLL
+        (opcode == 7'b0110011 && funct3 == 3'b101 && funct7[5] == 1'b0) ? 4'd6 : // SRL
+        (opcode == 7'b0110011 && funct3 == 3'b101 && funct7[5] == 1'b1) ? 4'd7 : // SRA
+        (opcode == 7'b0110011 && funct3 == 3'b010)                      ? 4'd8 : // SLT
+        (opcode == 7'b0110011 && funct3 == 3'b011)                      ? 4'd9 : // SLTU
         // I-type ALU-immediate
         (opcode == 7'b0010011 && funct3 == 3'b000)                      ? 4'd0 : // ADDI
-        (opcode == 7'b0010011 && funct3 == 3'b111)                      ? 4'd2 : // ANDI
+        (opcode == 7'b0010011 && funct3 == 3'b100)                      ? 4'd2 : // XORI
         (opcode == 7'b0010011 && funct3 == 3'b110)                      ? 4'd3 : // ORI
-        (opcode == 7'b0010011 && funct3 == 3'b100)                      ? 4'd4 : // XORI
-        (opcode == 7'b0010011 && funct3 == 3'b010)                      ? 4'd5 : // SLTI
-        (opcode == 7'b0010011 && funct3 == 3'b011)                      ? 4'd6 : // SLTIU
+        (opcode == 7'b0010011 && funct3 == 3'b111)                      ? 4'd4 : // ANDI
+        (opcode == 7'b0010011 && funct3 == 3'b001)                      ? 4'd5 : // SLLI
+        (opcode == 7'b0010011 && funct3 == 3'b101 && funct7[5] == 1'b0) ? 4'd6 : // SRLI
+        (opcode == 7'b0010011 && funct3 == 3'b101 && funct7[5] == 1'b1) ? 4'd7 : // SRAI
+        (opcode == 7'b0010011 && funct3 == 3'b010)                      ? 4'd8 : // SLTI
+        (opcode == 7'b0010011 && funct3 == 3'b011)                      ? 4'd9 : // SLTIU
         // Load/store and branch: use ADD for address / compare base
         (opcode == 7'b0000011)                                          ? 4'd0 : // LOAD
         (opcode == 7'b0100011)                                          ? 4'd0 : // STORE
@@ -429,7 +440,10 @@ def _llm_review_rtl(spec: FormalSpec, plan: MicroarchPlan, output: "RTLOutput") 
     Ask the LLM to review the generated RTL for synthesis / correctness issues.
     Returns a list of review notes, or empty list if unavailable.
     """
-    from .llm_client import llm_complete
+    try:
+        from .llm_client import llm_complete
+    except ImportError:
+        return []
 
     system = (
         "You are a senior RTL design engineer and verification expert. "

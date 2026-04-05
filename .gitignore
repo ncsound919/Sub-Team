@@ -1,3 +1,5 @@
+.env
+.env.*
 rtl_out/
 __pycache__/
 *.pyc

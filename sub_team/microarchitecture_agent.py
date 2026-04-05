@@ -231,7 +231,10 @@ def _llm_augment_plan(spec: FormalSpec, plan: "MicroarchPlan") -> List[str]:
     Ask the LLM to justify the chosen pipeline and suggest alternatives.
     Returns a list of rationale strings, or empty list if unavailable.
     """
-    from .llm_client import llm_complete
+    try:
+        from .llm_client import llm_complete
+    except ImportError:
+        return []
 
     system = (
         "You are a senior CPU microarchitect. Given an ISA formal spec and the "

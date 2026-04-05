@@ -2,6 +2,9 @@
 Tests for the sub-team agent pipeline.
 """
 
+import os
+import tempfile
+
 import pytest
 
 from sub_team import (
@@ -234,7 +237,6 @@ class TestImplementationAgent:
         paths = rtl.write_to_dir(str(tmp_path))
         assert len(paths) == 4
         for p in paths:
-            import os
             assert os.path.isfile(p)
             assert p.endswith(".v")
 
@@ -279,7 +281,6 @@ class TestVerificationAgent:
 
 def test_full_pipeline_rv32im():
     from main import run_pipeline
-    import tempfile
     with tempfile.TemporaryDirectory() as d:
         cpu = CPU(
             isa=ISA.RV32IM,
@@ -293,7 +294,6 @@ def test_full_pipeline_rv32im():
 
 def test_full_pipeline_rv64im():
     from main import run_pipeline
-    import tempfile
     with tempfile.TemporaryDirectory() as d:
         cpu = CPU(isa=ISA.RV64IM, pipeline=PipelineTemplate.FIVE_STAGE)
         result = run_pipeline(cpu, rtl_output_dir=d)
@@ -862,13 +862,11 @@ class TestLLMAugmentation:
         import sub_team.llm_client as lc
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key-for-test")
         lc.reset_client()
-        # Even with a key, without the real openai package installed the
-        # result may be None; just assert it doesn't raise
-        try:
-            lc.llm_complete("sys", "usr")
-        except Exception:  # noqa: BLE001
-            pass
+        # After reset, the cached client should be cleared (internal _client is None)
+        assert lc._client is None
+        # A second reset should also not raise
         lc.reset_client()
+        assert lc._client is None
 
     # ── SpecificationAgent LLM path ────────────────────────────────────────
 

@@ -229,7 +229,10 @@ def _llm_augment_spec(spec: "FormalSpec", cpu: "CPU") -> List[str]:
     Ask the LLM for supplementary analysis of the generated FormalSpec.
     Returns a list of note strings, or an empty list if LLM is unavailable.
     """
-    from .llm_client import llm_complete  # local import keeps dependency soft
+    try:
+        from .llm_client import llm_complete  # local import keeps dependency soft
+    except ImportError:
+        return []
 
     system = (
         "You are an expert CPU architect and hardware verification engineer. "

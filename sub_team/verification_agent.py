@@ -84,7 +84,7 @@ class VerificationReport:
 
     @property
     def all_passed(self) -> bool:
-        return self.failed == 0 and self.unresolved == 0
+        return len(self.results) > 0 and self.failed == 0 and self.unresolved == 0
 
     def summary(self) -> str:
         lines = [
@@ -248,7 +248,10 @@ def _llm_analyse_report(
     Ask the LLM to analyse the verification report and suggest fixes.
     Returns a list of analysis strings, or empty list if unavailable.
     """
-    from .llm_client import llm_complete
+    try:
+        from .llm_client import llm_complete
+    except ImportError:
+        return []
 
     system = (
         "You are a hardware verification engineer. Given a structural verification "

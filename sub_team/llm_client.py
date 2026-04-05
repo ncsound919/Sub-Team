@@ -15,12 +15,14 @@ Design principles
   raising.  Callers treat ``None`` as "no LLM augmentation available".
 * **Thin wrapper** – the client does not cache, batch, or retry on its own.
   Error handling returns ``None`` so callers stay simple.
+* **Thread-safe** – the singleton client is lazily initialised behind a lock.
 * **Model selection** – defaults to ``openai/gpt-4o-mini`` (cheap, fast) but
   callers can override via the ``model`` parameter.
 
 Environment variables
 ---------------------
-Either of the following is accepted (``OPENAI_API_KEY`` takes precedence):
+Either of the following is accepted (``OPENROUTER_API_KEY`` takes precedence
+when ``OPENAI_BASE_URL`` points to OpenRouter):
 
     OPENAI_API_KEY          – standard OpenAI key (used as Bearer token)
     OPENROUTER_API_KEY      – OpenRouter-specific key (same format)
@@ -31,55 +33,78 @@ Either of the following is accepted (``OPENAI_API_KEY`` takes precedence):
 
 from __future__ import annotations
 
+__all__ = ["llm_complete", "llm_available", "reset_client"]
+
+import logging
 import os
+import threading
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Lazy import of openai — avoids a hard dependency at import time
 # ---------------------------------------------------------------------------
 
+# None = not checked yet, True = available, False = permanently unavailable
 _openai_available: Optional[bool] = None
 _client = None                        # openai.OpenAI instance (created once)
+_lock = threading.Lock()
 
 
 def _get_client():
     """Return a cached OpenAI-compatible client, or None if unavailable."""
     global _openai_available, _client
 
+    # Fast path: already determined unavailable
     if _openai_available is False:
         return None
 
+    # Fast path: already initialised
     if _client is not None:
         return _client
 
-    # Resolve API key (OPENAI_API_KEY takes precedence over OPENROUTER_API_KEY)
-    api_key = (
-        os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("OPENROUTER_API_KEY")
-    )
-    if not api_key:
-        _openai_available = False
-        return None
+    # Slow path: initialise under lock (double-checked locking)
+    with _lock:
+        # Re-check after acquiring lock
+        if _openai_available is False:
+            return None
+        if _client is not None:
+            return _client
 
-    base_url = os.environ.get(
-        "OPENAI_BASE_URL", "https://openrouter.ai/api/v1"
-    )
+        # Resolve API key (OPENROUTER_API_KEY preferred, fallback to OPENAI_API_KEY)
+        api_key = (
+            os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
+        if not api_key:
+            _openai_available = False
+            return None
 
-    try:
-        from openai import OpenAI  # type: ignore[import]
-        _client = OpenAI(api_key=api_key, base_url=base_url)
-        _openai_available = True
-        return _client
-    except ImportError:
-        _openai_available = False
-        return None
+        base_url = os.environ.get(
+            "OPENAI_BASE_URL", "https://openrouter.ai/api/v1"
+        )
+
+        try:
+            from openai import OpenAI  # type: ignore[import-untyped]
+            _client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=30.0,
+                max_retries=2,
+            )
+            _openai_available = True
+            return _client
+        except ImportError:
+            _openai_available = False
+            return None
 
 
 # ---------------------------------------------------------------------------
 # Default model
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MODEL = os.environ.get("SUB_TEAM_LLM_MODEL", "openai/gpt-4o-mini")
+_DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
 # ---------------------------------------------------------------------------
@@ -117,11 +142,16 @@ def llm_complete(
         Assistant's reply text, or ``None`` if the client is unavailable or
         an error occurs.
     """
+    # Input validation
+    if not system_prompt or not user_prompt:
+        return None
+
     client = _get_client()
     if client is None:
         return None
 
-    chosen_model = model or _DEFAULT_MODEL
+    # Read model lazily so env var changes after import are respected
+    chosen_model = model or os.environ.get("SUB_TEAM_LLM_MODEL", _DEFAULT_MODEL)
 
     try:
         response = client.chat.completions.create(
@@ -133,8 +163,13 @@ def llm_complete(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        return response.choices[0].message.content
-    except Exception:  # noqa: BLE001  — degrade silently
+        if not response.choices:
+            _log.debug("LLM returned empty choices for model=%s", chosen_model)
+            return None
+        content = response.choices[0].message.content
+        return content.strip() if content else None
+    except Exception:  # noqa: BLE001  — degrade gracefully
+        _log.debug("LLM call failed for model=%s", chosen_model, exc_info=True)
         return None
 
 
@@ -148,5 +183,6 @@ def reset_client() -> None:
     Reset the cached client (useful in tests to inject env-var changes).
     """
     global _openai_available, _client
-    _openai_available = None
-    _client = None
+    with _lock:
+        _openai_available = None
+        _client = None

@@ -101,6 +101,16 @@ class DomainProblem:
     parameters: Dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # Validate types
+        if not isinstance(self.parameters, dict):
+            raise TypeError(
+                f"parameters must be a dict, got {type(self.parameters).__name__}."
+            )
+        for d in self.domains:
+            if not isinstance(d, str):
+                raise TypeError(
+                    f"Each domain must be a string, got {type(d).__name__}: {d!r}."
+                )
         # De-duplicate while preserving order
         seen: List[str] = []
         for d in self.domains:
@@ -123,6 +133,19 @@ class DomainInsight:
     confidence: float              # 0.0 (low) – 1.0 (high)
     risk_level: str                # "low", "medium", "high"
     related_domains: List[str] = field(default_factory=list)
+
+    _VALID_RISK_LEVELS = {"low", "medium", "high"}
+
+    def __post_init__(self) -> None:
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(
+                f"confidence must be in [0.0, 1.0], got {self.confidence}."
+            )
+        if self.risk_level not in self._VALID_RISK_LEVELS:
+            raise ValueError(
+                f"risk_level must be one of {sorted(self._VALID_RISK_LEVELS)}, "
+                f"got {self.risk_level!r}."
+            )
 
 
 @dataclass
@@ -206,6 +229,10 @@ def _analyse_logistics(params: Dict) -> List[DomainInsight]:
     demand_var: float = float(_p(params, "demand_variability", 0.2))
     lead_time: int = int(_p(params, "lead_time_days", 14))
 
+    if units < 0:
+        raise ValueError(f"units must be >= 0, got {units}.")
+    if routes < 0:
+        raise ValueError(f"routes must be >= 0, got {routes}.")
     if lead_time < 0:
         raise ValueError(
             f"lead_time_days must be >= 0, got {lead_time}."
@@ -363,6 +390,13 @@ def _analyse_fintech(params: Dict) -> List[DomainInsight]:
     tx_volume: int = int(_p(params, "transaction_volume", 10_000))
     risk_tol: float = float(_p(params, "risk_tolerance", 0.5))
     volatility: float = float(_p(params, "market_volatility", 0.3))
+
+    if tx_volume < 0:
+        raise ValueError(f"transaction_volume must be >= 0, got {tx_volume}.")
+    if not (0.0 <= risk_tol <= 1.0):
+        raise ValueError(f"risk_tolerance must be in [0.0, 1.0], got {risk_tol}.")
+    if not (0.0 <= volatility <= 1.0):
+        raise ValueError(f"market_volatility must be in [0.0, 1.0], got {volatility}.")
 
     insights: List[DomainInsight] = []
 
@@ -600,6 +634,11 @@ def _analyse_legal(params: Dict) -> List[DomainInsight]:
     liability_cap: float = float(_p(params, "liability_cap_usd", 0))
     industry: str = str(_p(params, "industry", "general")).lower()
 
+    if clause_count < 0:
+        raise ValueError(f"contract_clause_count must be >= 0, got {clause_count}.")
+    if liability_cap < 0:
+        raise ValueError(f"liability_cap_usd must be >= 0, got {liability_cap}.")
+
     # Normalise to sets of lowercase strings
     data_types: set = {str(d).lower() for d in (raw_data_types or [])}
     jurisdictions: set = {str(j).upper() for j in (raw_jurisdictions or [])}
@@ -700,7 +739,22 @@ def _analyse_legal(params: Dict) -> List[DomainInsight]:
         ))
 
     # ── Industry-specific obligations ───────────────────────────────────────
-    obligations = _INDUSTRY_OBLIGATIONS.get(industry, _INDUSTRY_OBLIGATIONS["general"])
+    if industry in _INDUSTRY_OBLIGATIONS:
+        obligations = _INDUSTRY_OBLIGATIONS[industry]
+    else:
+        obligations = _INDUSTRY_OBLIGATIONS["general"]
+        insights.append(DomainInsight(
+            domain="legal",
+            finding=(
+                f"Unknown industry '{industry}': no industry-specific obligations "
+                f"on file. Supported industries: "
+                f"{', '.join(sorted(k for k in _INDUSTRY_OBLIGATIONS if k != 'general'))}. "
+                f"Falling back to general obligations; manual legal review recommended."
+            ),
+            confidence=0.60,
+            risk_level="medium",
+            related_domains=[],
+        ))
     for obligation in obligations:
         insights.append(DomainInsight(
             domain="legal",
@@ -924,7 +978,7 @@ class CrossDisciplinaryAgent:
         _risk_weight = {"low": 0.1, "medium": 0.5, "high": 0.9}
         if all_insights:
             overall_risk = sum(
-                _risk_weight[i.risk_level] * i.confidence for i in all_insights
+                _risk_weight.get(i.risk_level, 0.5) * i.confidence for i in all_insights
             ) / sum(i.confidence for i in all_insights)
         else:
             overall_risk = 0.0
