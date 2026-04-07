@@ -1,3 +1,35 @@
+# ─── Core (existing) ───────────────────────────────────────────
 openai>=1.0.0
 python-dotenv
 requests>=2.28
+
+# ─── Agentic Framework ────────────────────────────────────────
+crewai>=0.108.0
+crewai-tools>=0.38.0
+
+# ─── MCP (Model Context Protocol) ─────────────────────────────
+mcp>=1.0.0
+
+# ─── Agent Memory ─────────────────────────────────────────────
+mem0ai>=0.1.0
+
+# ─── Code Execution Sandbox ───────────────────────────────────
+e2b-code-interpreter>=1.0.0
+
+# ─── Web & Browser ────────────────────────────────────────────
+duckduckgo-search>=7.0.0
+firecrawl-py>=1.0.0
+markdownify>=0.14.0
+
+# ─── Data & Documents ─────────────────────────────────────────
+pandas>=2.0.0
+pyyaml>=6.0
+
+# ─── HTTP Server (Draymond integration) ───────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.0.0
+
+# ─── Utilities ─────────────────────────────────────────────────
+rich>=13.0.0
+tenacity>=8.0.0

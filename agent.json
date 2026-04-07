@@ -1,0 +1,82 @@
+{
+  "id": "sub-team",
+  "slug": "sub-team",
+  "name": "Sub-Team",
+  "codename": "SubTeam",
+  "version": "2.0.0",
+  "tier": "core",
+  "role": "Full-Spectrum Agentic Workforce",
+  "tagline": "8 specialized AI agents + deterministic CPU pipeline",
+  "bio": "Sub-Team is a full-spectrum agentic workforce powered by CrewAI. 8 specialized agents handle research, coding, data science, business strategy, creative content, security analysis, systems architecture, and hardware design. Retains the original deterministic CPU RTL pipeline, cross-disciplinary analysis, and business intelligence with Stripe/HubSpot connectors. Accessible via HTTP API or subprocess.",
+  "personality": "precise",
+  "voice": "methodical, structured, technical",
+  "theme": {
+    "accentColor": "#8b5cf6",
+    "cardStyle": "holographic",
+    "portraitFrame": "hexagon",
+    "badgeColor": "#8b5cf6"
+  },
+  "specialties": [
+    "agentic-workforce",
+    "multi-agent-pipeline",
+    "cross-disciplinary",
+    "cpu-design",
+    "research",
+    "code-generation",
+    "data-science",
+    "business-strategy",
+    "security-analysis",
+    "systems-architecture"
+  ],
+  "capabilities": [
+    { "id": "agentic-workforce", "label": "Agentic Workforce", "description": "8 CrewAI agents with auto-routing and cross-disciplinary teamwork" },
+    { "id": "research", "label": "Research & Analysis", "description": "Web research, competitive analysis, market sizing, tech evaluation" },
+    { "id": "code-generation", "label": "Software Engineering", "description": "Code generation, reviews, bug fixes, refactoring, testing" },
+    { "id": "data-science", "label": "Data Science", "description": "Data analysis, ML model building, visualization" },
+    { "id": "business-strategy", "label": "Business Strategy", "description": "Financial modeling, business plans, pitch decks" },
+    { "id": "creative-content", "label": "Creative Content", "description": "Content creation, copywriting, documentation" },
+    { "id": "security-analysis", "label": "Security Analysis", "description": "Security audits, threat modeling, compliance checks" },
+    { "id": "systems-architecture", "label": "Architecture", "description": "System design, API design, database design" },
+    { "id": "cpu-design", "label": "CPU Design", "description": "Automated RTL/Verilog generation pipeline (deterministic)" },
+    { "id": "cross-disciplinary-analysis", "label": "Cross-Disciplinary", "description": "Analysis across logistics, biotech, fintech, legal domains" },
+    { "id": "business-intelligence", "label": "Business Intel", "description": "Finance and sales analysis with Stripe/HubSpot data" },
+    { "id": "agent-memory", "label": "Agent Memory", "description": "Persistent cross-session memory via Mem0 with vector search" }
+  ],
+  "stats": [
+    { "label": "Precision", "value": 95, "color": "#8b5cf6" },
+    { "label": "Versatility", "value": 98, "color": "#8b5cf6" },
+    { "label": "Agents", "value": 8, "color": "#8b5cf6", "isCount": true },
+    { "label": "Task Types", "value": 30, "color": "#8b5cf6", "isCount": true }
+  ],
+  "tags": ["agentic", "crewai", "workforce", "pipeline", "agents", "cpu", "rtl", "business", "research", "security"],
+  "runtime": {
+    "type": "http_api",
+    "baseUrl": "http://localhost:8050",
+    "healthPath": "/health",
+    "timeoutMs": 120000,
+    "fallback": {
+      "type": "subprocess",
+      "command": "python main.py",
+      "timeoutMs": 60000
+    }
+  },
+  "permissions": {
+    "canReadFiles": true,
+    "canWriteFiles": true,
+    "canRunCommands": true,
+    "canAccessInternet": true,
+    "canAccessDatabase": false,
+    "canSendEmail": false
+  },
+  "modelPreferences": {
+    "primary": "openrouter/auto",
+    "fallback": "deterministic"
+  },
+  "workflows": [],
+  "memoryEnabled": true,
+  "persistentMemory": true,
+  "status": "offline",
+  "installedAt": "2025-01-01T00:00:00.000Z",
+  "updatedAt": "2026-04-07T00:00:00.000Z",
+  "sourceType": "folder"
+}
