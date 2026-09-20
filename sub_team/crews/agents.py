@@ -56,10 +56,23 @@ def get_llm() -> LLM:
     Build the LLM instance for agents.
 
     Priority:
+      0. SUB_TEAM_LLM_BASE_URL set → local OpenAI-compatible server
+         (Spark-X2.5-4B via llama.cpp). Local-first.
       1. ANTHROPIC_API_KEY → claude-sonnet-4-5 via Anthropic
       2. OPENAI_API_KEY with standard base → gpt-4o via OpenAI
       3. OPENROUTER_API_KEY → openai/gpt-4o-mini via OpenRouter
     """
+    # Local-first: route the whole CrewAI workforce at the on-box model.
+    local_base = os.environ.get("SUB_TEAM_LLM_BASE_URL", "").strip()
+    if local_base:
+        local_model = os.environ.get("SUB_TEAM_LLM_MODEL", "minicpm5-2b")
+        return LLM(
+            model=f"openai/{local_model}",
+            base_url=local_base,
+            api_key=os.environ.get("SUB_TEAM_LLM_API_KEY", "local"),
+            temperature=0.2,
+        )
+
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if anthropic_key:
         return LLM(
