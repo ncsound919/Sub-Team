@@ -1,7 +1,7 @@
 # ─── Core (existing) ───────────────────────────────────────────
 openai>=1.0.0
 python-dotenv
-requests>=2.28
+requests>=2.34.2
 
 # ─── Agentic Framework ────────────────────────────────────────
 crewai>=0.108.0
