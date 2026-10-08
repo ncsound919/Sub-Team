@@ -18,7 +18,7 @@ e2b-code-interpreter>=1.0.0
 
 # ─── Web & Browser ────────────────────────────────────────────
 duckduckgo-search>=7.0.0
-firecrawl-py>=1.0.0
+firecrawl-py>=4.46.2
 markdownify>=0.14.0
 
 # ─── Data & Documents ─────────────────────────────────────────
