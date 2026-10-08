@@ -28,7 +28,7 @@ pyyaml>=6.0
 # ─── HTTP Server (Draymond integration) ───────────────────────
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
-pydantic>=2.0.0
+pydantic>=2.13.5
 
 # ─── Utilities ─────────────────────────────────────────────────
 rich>=13.0.0
