@@ -14,7 +14,7 @@ mcp>=1.0.0
 mem0ai>=0.1.0
 
 # ─── Code Execution Sandbox ───────────────────────────────────
-e2b-code-interpreter>=1.0.0
+e2b-code-interpreter>=2.10.1
 
 # ─── Web & Browser ────────────────────────────────────────────
 duckduckgo-search>=7.0.0
